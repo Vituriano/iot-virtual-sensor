@@ -16,8 +16,9 @@ iot-virtual-sensor/
 ```
 
 Sensor e Platform são processos independentes — não se chamam
-diretamente. O único ponto de contato é um arquivo compartilhado que o
-Sensor escreve e a Platform lê (`estado-sensor/leituras_atual.json`).
+diretamente. O único ponto de contato é um broker MQTT: o Sensor publica
+no tópico `rmr/chuva/ciclo` e a Platform assina. Detalhes e diagrama em
+[`docs/arquitetura.md`](docs/arquitetura.md).
 
 ## Shared
 
@@ -25,10 +26,10 @@ Código e dado usados pelos dois outros projetos:
 
 - `Grid/H3GridBuilder.cs` — gera a grade de 3.210 células H3 a partir dos
   polígonos dos 14 municípios (`Data/rmr_municipios.json`, IBGE, estático).
-- `Common/PathHelpers.cs` — resolve caminhos de arquivo de forma estável,
-  incluindo a pasta compartilhada entre Sensor e Platform.
-- `LeituraStore.cs` — contrato de troca de dado: o Sensor escreve a chuva
-  do ciclo, a Platform lê.
+- `Common/PathHelpers.cs` — resolve caminhos de arquivo de forma estável
+  (usado pra achar `Data/` e o histórico local).
+- `LeituraMqtt.cs` — contrato de troca de dado: tópico MQTT e formato JSON
+  da leitura de cada ciclo.
 
 ## Sensor
 
@@ -61,7 +62,7 @@ Cruza a chuva publicada pelo Sensor com dado estático e calcula o risco:
 - `Processing/RiskCalculator.cs` combina os três fatores na fórmula
   `R = P · M · S` (chuva × maré × terreno), classifica em 4 níveis (0 a
   3) e calcula probabilidade estimada e grau de confiança por célula.
-- `RiscoIngestorService.cs` fica de olho no arquivo do Sensor; a cada
+- `RiscoIngestorService.cs` assina o tópico MQTT do Sensor; a cada
   ciclo novo, recalcula o risco e atualiza o cache em memória
   (`RiscoCache.cs`) que a API lê.
 
@@ -77,11 +78,13 @@ município, nível (0-3), probabilidade, confiança e os fatores (P, M, S).
 
 ## Como rodar tudo
 
-Em dois terminais:
-
 ```bash
+docker compose up -d             # broker MQTT (Mosquitto, porta 1883)
+dotnet run --project Platform    # consome, calcula risco, expõe API + dashboard
 dotnet run --project Sensor      # publica leitura a cada 15 min
-dotnet run --project Platform    # consome, calcula risco, expõe API
 ```
+
+O dashboard (mapa H3 colorido por nível de risco) fica em
+`http://localhost:5128/`.
 
 Ou builda a solução inteira de uma vez com `dotnet build`.

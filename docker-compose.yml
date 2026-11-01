@@ -1,0 +1,8 @@
+# Broker MQTT local (Mosquitto) — ponto de encontro entre Sensor e Platform.
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro

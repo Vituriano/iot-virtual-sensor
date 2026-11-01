@@ -1,3 +1,7 @@
+using System.Net.Sockets;
+using MQTTnet;
+using MQTTnet.Exceptions;
+using MQTTnet.Protocol;
 using VirtualSensor.Grid;
 using VirtualSensor.Sensing;
 using VirtualSensor.Shared;
@@ -11,10 +15,11 @@ namespace VirtualSensor.Sensor;
 /// valor bruto. Nenhuma classificação de risco é feita aqui — isso é
 /// regra de negócio da Platform, não sensoriamento.
 ///
-/// A cada ciclo, o Worker publica a leitura em <see cref="LeituraStore"/>
-/// pra Platform consumir. É a única ligação entre os dois processos.
+/// A cada ciclo, o Worker publica a leitura via MQTT (Wi-Fi, TCP/1883) no
+/// tópico <see cref="LeituraMqtt.TopicoCiclo"/> pra Platform consumir. É a
+/// única ligação entre os dois processos.
 /// </summary>
-public class Worker(ILogger<Worker> logger, IHostApplicationLifetime lifetime) : BackgroundService
+public class Worker(ILogger<Worker> logger, IHostApplicationLifetime lifetime, IConfiguration config) : BackgroundService
 {
     private static readonly TimeSpan CicloIntervalo = TimeSpan.FromMinutes(15);
 
@@ -30,6 +35,8 @@ public class Worker(ILogger<Worker> logger, IHostApplicationLifetime lifetime) :
             grid.Count, H3GridBuilder.H3Resolution);
 
         var cliente = new CemadenClient();
+        var brokerHost = config["Mqtt:Host"] ?? "localhost";
+        var brokerPort = int.Parse(config["Mqtt:Port"] ?? "1883");
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -39,15 +46,16 @@ public class Worker(ILogger<Worker> logger, IHostApplicationLifetime lifetime) :
                 var chuvaPorCelula = CellReadingAssigner.AtribuirLeiturasACelulas(leituras, grid);
 
                 var agora = DateTimeOffset.UtcNow;
-                LeituraStore.Salvar(new SnapshotLeituras(agora, chuvaPorCelula));
+                await PublicarAsync(new SnapshotLeituras(agora, chuvaPorCelula), brokerHost, brokerPort, stoppingToken);
 
                 logger.LogInformation(
                     "Ciclo publicado: {Estacoes} estações lidas, {Celulas}/{Total} células com leitura.",
                     leituras.Count, chuvaPorCelula.Count, grid.Count);
             }
-            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or MqttCommunicationException or SocketException)
             {
-                // Falha de rede ao falar com o feed da APAC/Cemaden: transitório,
+                // Falha de rede ao falar com o feed da APAC/Cemaden ou com o
+                // broker MQTT: transitório,
                 // o próximo ciclo tenta de novo sozinho.
                 logger.LogWarning("Falha de rede no ciclo, tentando de novo no próximo ciclo: {Erro}", ex.Message);
             }
@@ -60,5 +68,28 @@ public class Worker(ILogger<Worker> logger, IHostApplicationLifetime lifetime) :
 
             await Task.Delay(CicloIntervalo, stoppingToken);
         }
+    }
+
+    // Conecta, publica e desconecta a cada ciclo: com 15 min entre
+    // publicações, manter a conexão aberta só adiciona reconexão pra tratar.
+    private static async Task PublicarAsync(SnapshotLeituras snapshot, string host, int port, CancellationToken ct)
+    {
+        using var mqtt = new MqttClientFactory().CreateMqttClient();
+        var opcoes = new MqttClientOptionsBuilder()
+            .WithTcpServer(host, port)
+            .WithClientId("virtual-sensor-rmr")
+            .Build();
+
+        await mqtt.ConnectAsync(opcoes, ct);
+
+        var mensagem = new MqttApplicationMessageBuilder()
+            .WithTopic(LeituraMqtt.TopicoCiclo)
+            .WithPayload(LeituraMqtt.Serializar(snapshot))
+            .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
+            .WithRetainFlag()
+            .Build();
+
+        await mqtt.PublishAsync(mensagem, ct);
+        await mqtt.DisconnectAsync(cancellationToken: ct);
     }
 }

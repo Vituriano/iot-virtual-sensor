@@ -83,6 +83,14 @@ public static class RainHistoryStore
         Directory.CreateDirectory(PathHelpers.SiblingDir("estado"));
 
         var registros = Ler().Where(r => tsAgora - r.Ts <= JanelaMaxima).ToList();
+
+        // O broker reentrega o último ciclo (retain) quando a Platform
+        // reinicia; sem esta checagem a mesma chuva seria somada duas vezes.
+        if (registros.Any(r => r.Ts == tsAgora))
+        {
+            return registros;
+        }
+
         registros.Add(new HistoricoRegistro(tsAgora, new Dictionary<string, decimal>(chuvaPorCelula)));
 
         using var writer = new StreamWriter(HistoricoPath(), append: false);

@@ -1,7 +1,7 @@
-// Plataforma IoT: recebe a chuva publicada pelo Sensor (via LeituraStore),
+// Plataforma IoT: recebe a chuva publicada pelo Sensor (via MQTT),
 // cruza com maré e terreno (dado estático), calcula o risco por célula e
 // expõe isso por HTTP. Roda como processo separado do Sensor — os dois só
-// se falam através do arquivo compartilhado em estado-sensor/.
+// se falam através do broker MQTT.
 
 using VirtualSensor.Platform;
 
@@ -17,6 +17,9 @@ if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
+
+app.UseDefaultFiles();
+app.UseStaticFiles();
 
 app.MapGet("/risco/atual", (RiscoCache cache) =>
 {
