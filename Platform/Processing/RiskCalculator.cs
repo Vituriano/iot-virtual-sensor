@@ -13,7 +13,7 @@ public sealed record RiscoCelula(
     decimal R,
     int Nivel,
     decimal Probabilidade,
-    string Confianca);
+    DateTimeOffset UltimaLeitura);
 
 /// <summary>
 /// Combina chuva, maré e terreno num nível de risco por célula.
@@ -39,8 +39,9 @@ public sealed record RiscoCelula(
 ///     mesmos NivelCortes) — NÃO é uma probabilidade estatística calibrada
 ///     contra ocorrências reais, só um proxy enquanto essa calibração não
 ///     existe.
-///   - Confianca: "alta" se a célula teve leitura de chuva neste ciclo,
-///     "média" se só tem leitura mais antiga ainda dentro da janela de 3h.
+///   - Confianca: depende da idade da última leitura da célula, avaliada
+///     na hora da consulta (ver CalcularConfianca): "alta" se fresca,
+///     "média" se mais velha, "sem dado recente" se passou de 1h.
 ///     O documento também liga confiança à distância até o pluviômetro
 ///     mais próximo e à disponibilidade de rótulos de ocorrência por
 ///     região — nenhuma das duas entra aqui ainda, então não existe tier
@@ -62,9 +63,12 @@ public static class RiskCalculator
 
     private static readonly decimal[] NivelCortes = { 0.3m, 0.7m, 1.2m };
 
-    // Abaixo de que idade uma leitura ainda conta como "fresca" (confiança
-    // alta) em vez de "só dentro da janela de 3h" (confiança média).
+    // Idade da última leitura da célula que define a confiança: até 20 min
+    // é alta, até 1h é média, depois disso o dado é tratado como velho.
     private static readonly TimeSpan IdadeConfiancaAlta = TimeSpan.FromMinutes(20);
+    private static readonly TimeSpan IdadeConfiancaMedia = TimeSpan.FromHours(1);
+
+    public const string SemDadoRecente = "sem dado recente";
 
     public static int NivelDeRisco(decimal r)
     {
@@ -91,8 +95,16 @@ public static class RiskCalculator
     private static decimal Interpolar(decimal x, decimal x0, decimal x1, decimal y0, decimal y1)
         => y0 + (y1 - y0) * (x - x0) / (x1 - x0);
 
+    // Avaliada a cada consulta (não gravada no cache): uma célula que parou
+    // de receber leitura continua mostrando o último risco, mas a confiança
+    // cai sozinha com o tempo.
     public static string CalcularConfianca(DateTimeOffset tsAgora, DateTimeOffset ultimaLeituraTs)
-        => tsAgora - ultimaLeituraTs <= IdadeConfiancaAlta ? "alta" : "média";
+    {
+        var idade = tsAgora - ultimaLeituraTs;
+        if (idade <= IdadeConfiancaAlta) return "alta";
+        if (idade <= IdadeConfiancaMedia) return "média";
+        return SemDadoRecente;
+    }
 
     public static decimal FatorChuva(AcumuladoCelula acumulado)
     {
@@ -102,33 +114,26 @@ public static class RiskCalculator
         return Math.Max(p15, Math.Max(p1h, p3h));
     }
 
-    public static Dictionary<string, RiscoCelula> CalcularRisco(
-        Dictionary<string, CellInfo> grid,
-        Dictionary<string, AcumuladoCelula> acumuladoPorCelula,
-        decimal fatorMareAtual,
-        Dictionary<string, decimal> suscetibilidadePorCelula,
-        DateTimeOffset tsAgora)
+    public static RiscoCelula CalcularRisco(
+        CellInfo info,
+        AcumuladoCelula acumulado,
+        decimal fatorMare,
+        decimal? suscetibilidade)
     {
-        var resultado = new Dictionary<string, RiscoCelula>();
-        foreach (var (cell, acumulado) in acumuladoPorCelula)
-        {
-            var info = grid[cell];
-            var p = FatorChuva(acumulado);
-            var s = suscetibilidadePorCelula.GetValueOrDefault(cell, SuscetibilidadePadrao);
-            var r = p * fatorMareAtual * s;
-            resultado[cell] = new RiscoCelula(
-                info.Municipio,
-                acumulado.Min15,
-                acumulado.Hora1,
-                acumulado.Hora3,
-                p,
-                fatorMareAtual,
-                s,
-                r,
-                NivelDeRisco(r),
-                CalcularProbabilidade(r),
-                CalcularConfianca(tsAgora, acumulado.UltimaLeituraTs));
-        }
-        return resultado;
+        var p = FatorChuva(acumulado);
+        var s = suscetibilidade ?? SuscetibilidadePadrao;
+        var r = p * fatorMare * s;
+        return new RiscoCelula(
+            info.Municipio,
+            acumulado.Min15,
+            acumulado.Hora1,
+            acumulado.Hora3,
+            p,
+            fatorMare,
+            s,
+            r,
+            NivelDeRisco(r),
+            CalcularProbabilidade(r),
+            acumulado.UltimaLeituraTs);
     }
 }

@@ -27,15 +27,15 @@
 <body>
 <header>
   <h1>Risco de alagamento — Região Metropolitana do Recife</h1>
-  <span class="stat">Último ciclo: <b id="ciclo">—</b></span>
-  <span class="stat">Células com leitura: <b id="total">—</b></span>
+  <span class="stat">Atualizado em: <b id="ciclo">—</b></span>
+  <span class="stat">Sensores com leitura: <b id="total">—</b></span>
   <span class="stat" id="legenda"></span>
+  <span class="stat"><span class="chip" style="background:var(--muted);opacity:.3"></span>sem dado recente</span>
   <span id="erro">Platform indisponível ou sem ciclo recebido.</span>
 </header>
 <div id="map"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/h3-js@4.1.0/dist/h3-js.umd.js"></script>
 <script>
 const NIVEIS = [
   { nome: "Baixo",    cor: "#2e9e5b" },
@@ -54,29 +54,41 @@ L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
 }).addTo(map);
 const camada = L.layerGroup().addTo(map);
 
+const SEM_DADO = "sem dado recente";
+
 function popup(c) {
   const n = NIVEIS[c.nivel];
   return `<b>${c.municipio}</b><br>Nível: ${n.nome} (${c.nivel})<br>` +
     `Probabilidade: ${(c.probabilidade * 100).toFixed(0)}%<br>Confiança: ${c.confianca}<br>` +
+    `Última leitura: ${new Date(c.ultima_leitura).toLocaleString("pt-BR")}<br>` +
     `Chuva 1h: ${c.chuva_1h_mm} mm<br>` +
     `P=${c.fatores.p.toFixed(2)} · M=${c.fatores.m.toFixed(2)} · S=${c.fatores.s.toFixed(2)}`;
 }
 
+let platformUrl;
+
 async function atualizar() {
   const erro = document.getElementById("erro");
   try {
-    const r = await fetch("/risco/atual");
+    platformUrl ??= (await (await fetch("/config.json")).json()).platformUrl;
+    const r = await fetch(`${platformUrl}/risco/atual`);
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     erro.style.display = "none";
 
     camada.clearLayers();
-    for (const c of d.celulas) {
-      const cor = NIVEIS[c.nivel].cor;
-      L.polygon(h3.cellToBoundary(c.h3), { color: cor, weight: 1, fillColor: cor, fillOpacity: 0.55 })
-        .bindPopup(popup(c)).addTo(camada);
-    }
-    document.getElementById("ciclo").textContent = new Date(d.ciclo).toLocaleString("pt-BR");
+    L.geoJSON(d, {
+      style: f => {
+        const cor = NIVEIS[f.properties.nivel].cor;
+        const velho = f.properties.confianca === SEM_DADO;
+        return {
+          color: cor, weight: 1, fillColor: cor,
+          fillOpacity: velho ? 0.12 : 0.55, dashArray: velho ? "4" : null,
+        };
+      },
+      onEachFeature: (f, layer) => layer.bindPopup(popup(f.properties)),
+    }).addTo(camada);
+    document.getElementById("ciclo").textContent = new Date(d.atualizado_em).toLocaleString("pt-BR");
     document.getElementById("total").textContent = d.total_celulas;
   } catch {
     erro.style.display = "inline";

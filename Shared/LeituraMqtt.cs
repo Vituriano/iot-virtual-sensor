@@ -3,42 +3,45 @@ using System.Text.Json;
 namespace VirtualSensor.Shared;
 
 /// <summary>
-/// Contrato de troca de dado entre o Sensor (publisher) e a Platform
-/// (subscriber) sobre MQTT: o Sensor publica a chuva de cada ciclo no
-/// tópico <see cref="TopicoCiclo"/>, a Platform assina e calcula o risco.
-/// É a única coisa que liga os dois processos — nenhuma chamada direta,
-/// só mensagens via broker.
+/// Leitura de um sensor virtual (uma célula H3) num instante. Cada sensor
+/// publica a sua, de forma independente — não existe "ciclo" no contrato:
+/// a Platform trata cada mensagem pelo timestamp que ela traz.
 /// </summary>
-public sealed record SnapshotLeituras(DateTimeOffset Ciclo, Dictionary<string, decimal> ChuvaPorCelula);
+public sealed record LeituraCelula(string H3, DateTimeOffset Ts, decimal ChuvaMm);
 
+/// <summary>
+/// Contrato MQTT entre o Sensor (publisher) e a Platform (subscriber):
+/// cada sensor publica no seu próprio tópico <c>rmr/chuva/{h3}</c>, com
+/// retain — uma Platform que (re)conecta recebe a última leitura de cada
+/// sensor na hora, em vez de esperar a próxima. É a única coisa que liga
+/// os dois processos.
+/// </summary>
 public static class LeituraMqtt
 {
-    /// <summary>
-    /// Uma mensagem por ciclo (a cada 15 min) com a chuva de todas as
-    /// células. Publicada com retain, pra uma Platform que (re)conecta
-    /// receber o último ciclo na hora em vez de esperar o próximo.
-    /// </summary>
-    public const string TopicoCiclo = "rmr/chuva/ciclo";
+    private const string Prefixo = "rmr/chuva/";
 
-    public static byte[] Serializar(SnapshotLeituras snapshot) =>
+    /// <summary>Filtro que a Platform assina: todos os sensores.</summary>
+    public const string FiltroTodos = Prefixo + "+";
+
+    public static string TopicoDe(string h3) => Prefixo + h3;
+
+    public static string? H3De(string topico) =>
+        topico.StartsWith(Prefixo, StringComparison.Ordinal) ? topico[Prefixo.Length..] : null;
+
+    public static byte[] Serializar(LeituraCelula leitura) =>
         JsonSerializer.SerializeToUtf8Bytes(new
         {
-            ciclo = snapshot.Ciclo.ToString("o"),
-            chuva_por_celula = snapshot.ChuvaPorCelula,
+            ts = leitura.Ts.ToString("o"),
+            chuva_mm = leitura.ChuvaMm,
         });
 
-    public static SnapshotLeituras Desserializar(ReadOnlySpan<byte> payload)
+    public static LeituraCelula Desserializar(string h3, ReadOnlySpan<byte> payload)
     {
         using var doc = JsonDocument.Parse(payload.ToArray());
         var root = doc.RootElement;
-
-        var ciclo = DateTimeOffset.Parse(root.GetProperty("ciclo").GetString()!);
-        var chuva = new Dictionary<string, decimal>();
-        foreach (var prop in root.GetProperty("chuva_por_celula").EnumerateObject())
-        {
-            chuva[prop.Name] = prop.Value.GetDecimal();
-        }
-
-        return new SnapshotLeituras(ciclo, chuva);
+        return new LeituraCelula(
+            h3,
+            DateTimeOffset.Parse(root.GetProperty("ts").GetString()!),
+            root.GetProperty("chuva_mm").GetDecimal());
     }
 }

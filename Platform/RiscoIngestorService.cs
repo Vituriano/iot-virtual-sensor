@@ -8,14 +8,15 @@ using VirtualSensor.Shared;
 namespace VirtualSensor.Platform;
 
 /// <summary>
-/// Assina o tópico MQTT onde o Sensor publica a chuva de cada ciclo
-/// (<see cref="LeituraMqtt.TopicoCiclo"/>) e, a cada mensagem, cruza com
-/// maré e terreno, calcula o risco por célula e atualiza o
-/// <see cref="RiscoCache"/> que o endpoint HTTP lê. Essa é a Plataforma
+/// Assina os tópicos MQTT dos sensores (<see cref="LeituraMqtt.FiltroTodos"/>)
+/// e, a cada leitura de uma célula, cruza com maré e terreno, calcula o
+/// risco só daquela célula e atualiza a entrada dela no
+/// <see cref="RiscoCache"/> que o endpoint HTTP lê. Não há ciclo: cada
+/// sensor é independente. Essa é a Plataforma
 /// IoT: sensor e plataforma são processos separados, ligados só pelo broker.
 /// </summary>
 public sealed class RiscoIngestorService(
-    RiscoCache cache, IConfiguration config, ILogger<RiscoIngestorService> logger) : BackgroundService
+    RiscoCache cache, RainHistoryStore historico, IConfiguration config, ILogger<RiscoIngestorService> logger) : BackgroundService
 {
     private static readonly TimeSpan IntervaloReconexao = TimeSpan.FromSeconds(5);
 
@@ -30,8 +31,6 @@ public sealed class RiscoIngestorService(
 
         var host = config["Mqtt:Host"] ?? "localhost";
         var port = int.Parse(config["Mqtt:Port"] ?? "1883");
-
-        DateTimeOffset? ultimoCicloProcessado = null;
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -48,35 +47,29 @@ public sealed class RiscoIngestorService(
             {
                 try
                 {
-                    var snapshot = LeituraMqtt.Desserializar(e.ApplicationMessage.Payload.ToArray());
-                    if (snapshot.Ciclo == ultimoCicloProcessado)
+                    var h3 = LeituraMqtt.H3De(e.ApplicationMessage.Topic);
+                    if (h3 is null || !grid.TryGetValue(h3, out var info))
                     {
                         return Task.CompletedTask;
                     }
 
-                    var registros = RainHistoryStore.RegistrarCiclo(snapshot.Ciclo, snapshot.ChuvaPorCelula);
-                    var acumuladoPorCelula = RainHistoryStore.Acumulados(snapshot.Ciclo, registros);
+                    var leitura = LeituraMqtt.Desserializar(h3, e.ApplicationMessage.Payload.ToArray());
+                    var acumulado = historico.Registrar(h3, leitura.Ts, leitura.ChuvaMm);
+                    var fatorM = TideCalculator.FatorMare(leitura.Ts);
+                    var risco = RiskCalculator.CalcularRisco(
+                        info, acumulado, fatorM, suscetibilidadePorCelula.GetValueOrDefault(h3));
 
-                    var fatorM = TideCalculator.FatorMare(snapshot.Ciclo);
-
-                    var riscoPorCelula = RiskCalculator.CalcularRisco(
-                        grid, acumuladoPorCelula, fatorM, suscetibilidadePorCelula, snapshot.Ciclo);
-
-                    cache.Atualizar(snapshot.Ciclo, riscoPorCelula);
-                    ultimoCicloProcessado = snapshot.Ciclo;
-
-                    logger.LogInformation(
-                        "Risco recalculado para o ciclo {Ciclo}: {Count} células com leitura.",
-                        snapshot.Ciclo, riscoPorCelula.Count);
+                    cache.Atualizar(h3, risco);
+                    logger.LogDebug("Risco de {H3} atualizado: nível {Nivel}.", h3, risco.Nivel);
                 }
                 catch (Exception ex)
                 {
                     // Diferente do Sensor (que derruba o processo num erro
                     // inesperado): aqui tem gente consumindo a API ao vivo, então
-                    // um ciclo com erro (ex.: tábua de maré esgotada no fim do
+                    // uma leitura com erro (ex.: tábua de maré esgotada no fim do
                     // ano) fica logado como erro alto, mas a API continua no ar
                     // servindo o último risco válido em vez de cair inteira.
-                    logger.LogError(ex, "Falha ao processar o ciclo mais recente do sensor.");
+                    logger.LogError(ex, "Falha ao processar uma leitura do sensor.");
                 }
 
                 return Task.CompletedTask;
@@ -89,10 +82,10 @@ public sealed class RiscoIngestorService(
                     stoppingToken);
                 await mqtt.SubscribeAsync(
                     new MqttClientSubscribeOptionsBuilder()
-                        .WithTopicFilter(f => f.WithTopic(LeituraMqtt.TopicoCiclo).WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce))
+                        .WithTopicFilter(f => f.WithTopic(LeituraMqtt.FiltroTodos).WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce))
                         .Build(),
                     stoppingToken);
-                logger.LogInformation("Assinando {Topico} em {Host}:{Port}.", LeituraMqtt.TopicoCiclo, host, port);
+                logger.LogInformation("Assinando {Topico} em {Host}:{Port}.", LeituraMqtt.FiltroTodos, host, port);
 
                 await desconectou.Task.WaitAsync(stoppingToken);
                 logger.LogWarning("Conexão com o broker MQTT perdida.");

@@ -71,6 +71,23 @@ public static class H3GridBuilder
 
     public static string CellKey(H3Index index) => index.Value.ToString("x");
 
+    /// <summary>
+    /// Contorno da célula como anel GeoJSON: pares [lng, lat] em graus,
+    /// fechado (primeiro vértice repetido no fim), como a RFC 7946 exige.
+    /// </summary>
+    public static double[][] BoundaryLngLat(string cellKey)
+    {
+        var index = new H3Index(Convert.ToUInt64(cellKey, 16));
+        Api.H3ToGeoBoundary(index, out var boundary);
+
+        var anel = boundary.Verts
+            .Take(boundary.NumVerts)
+            .Select(v => new[] { Math.Round((double)v.Longitude * 180.0 / Math.PI, 6), Math.Round((double)v.Latitude * 180.0 / Math.PI, 6) })
+            .ToList();
+        anel.Add(anel[0]);
+        return anel.ToArray();
+    }
+
     public static string LatLngToCellKey(decimal lat, decimal lng)
     {
         var gc = GeoCoordExtensions.SetDegrees(new GeoCoord(), lat, lng);

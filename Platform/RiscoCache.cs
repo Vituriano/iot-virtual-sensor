@@ -1,33 +1,19 @@
+using System.Collections.Concurrent;
 using VirtualSensor.Processing;
 
 namespace VirtualSensor.Platform;
 
 /// <summary>
-/// Guarda o último risco calculado por célula, em memória. Escrito pelo
-/// RiscoIngestorService (a cada ciclo novo do sensor) e lido pelo endpoint
-/// HTTP — como os dois acontecem em threads diferentes (hosted service +
-/// requisições concorrentes), o acesso é protegido por lock.
+/// Guarda o último risco calculado por célula, em memória. Cada sensor
+/// atualiza só a sua própria entrada (RiscoIngestorService, a cada
+/// mensagem MQTT) enquanto o endpoint HTTP lê tudo — por isso o
+/// dicionário concorrente, sem lock global.
 /// </summary>
 public sealed class RiscoCache
 {
-    private readonly Lock _lock = new();
-    private Dictionary<string, RiscoCelula> _riscoPorCelula = new();
-    private DateTimeOffset? _ultimoCiclo;
+    private readonly ConcurrentDictionary<string, RiscoCelula> _riscoPorCelula = new();
 
-    public void Atualizar(DateTimeOffset ciclo, Dictionary<string, RiscoCelula> riscoPorCelula)
-    {
-        lock (_lock)
-        {
-            _ultimoCiclo = ciclo;
-            _riscoPorCelula = riscoPorCelula;
-        }
-    }
+    public void Atualizar(string celula, RiscoCelula risco) => _riscoPorCelula[celula] = risco;
 
-    public (DateTimeOffset? Ciclo, Dictionary<string, RiscoCelula> RiscoPorCelula) LerAtual()
-    {
-        lock (_lock)
-        {
-            return (_ultimoCiclo, _riscoPorCelula);
-        }
-    }
+    public IReadOnlyList<KeyValuePair<string, RiscoCelula>> LerTodas() => _riscoPorCelula.ToArray();
 }

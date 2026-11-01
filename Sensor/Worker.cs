@@ -15,9 +15,10 @@ namespace VirtualSensor.Sensor;
 /// valor bruto. Nenhuma classificação de risco é feita aqui — isso é
 /// regra de negócio da Platform, não sensoriamento.
 ///
-/// A cada ciclo, o Worker publica a leitura via MQTT (Wi-Fi, TCP/1883) no
-/// tópico <see cref="LeituraMqtt.TopicoCiclo"/> pra Platform consumir. É a
-/// única ligação entre os dois processos.
+/// A cada ciclo de leitura, cada sensor (célula) publica a sua chuva via
+/// MQTT (Wi-Fi, TCP/1883) no próprio tópico <c>rmr/chuva/{h3}</c>. Os
+/// sensores são independentes entre si: a Platform não espera "o ciclo
+/// completo". É a única ligação entre os dois processos.
 /// </summary>
 public class Worker(ILogger<Worker> logger, IHostApplicationLifetime lifetime, IConfiguration config) : BackgroundService
 {
@@ -46,10 +47,10 @@ public class Worker(ILogger<Worker> logger, IHostApplicationLifetime lifetime, I
                 var chuvaPorCelula = CellReadingAssigner.AtribuirLeiturasACelulas(leituras, grid);
 
                 var agora = DateTimeOffset.UtcNow;
-                await PublicarAsync(new SnapshotLeituras(agora, chuvaPorCelula), brokerHost, brokerPort, stoppingToken);
+                await PublicarAsync(agora, chuvaPorCelula, brokerHost, brokerPort, stoppingToken);
 
                 logger.LogInformation(
-                    "Ciclo publicado: {Estacoes} estações lidas, {Celulas}/{Total} células com leitura.",
+                    "Leituras publicadas: {Estacoes} estações lidas, {Celulas}/{Total} sensores com leitura.",
                     leituras.Count, chuvaPorCelula.Count, grid.Count);
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or MqttCommunicationException or SocketException)
@@ -70,9 +71,11 @@ public class Worker(ILogger<Worker> logger, IHostApplicationLifetime lifetime, I
         }
     }
 
-    // Conecta, publica e desconecta a cada ciclo: com 15 min entre
-    // publicações, manter a conexão aberta só adiciona reconexão pra tratar.
-    private static async Task PublicarAsync(SnapshotLeituras snapshot, string host, int port, CancellationToken ct)
+    // Conecta, publica uma mensagem por sensor e desconecta a cada ciclo:
+    // com 15 min entre leituras, manter a conexão aberta só adiciona
+    // reconexão pra tratar.
+    private static async Task PublicarAsync(
+        DateTimeOffset ts, Dictionary<string, decimal> chuvaPorCelula, string host, int port, CancellationToken ct)
     {
         using var mqtt = new MqttClientFactory().CreateMqttClient();
         var opcoes = new MqttClientOptionsBuilder()
@@ -82,14 +85,18 @@ public class Worker(ILogger<Worker> logger, IHostApplicationLifetime lifetime, I
 
         await mqtt.ConnectAsync(opcoes, ct);
 
-        var mensagem = new MqttApplicationMessageBuilder()
-            .WithTopic(LeituraMqtt.TopicoCiclo)
-            .WithPayload(LeituraMqtt.Serializar(snapshot))
-            .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
-            .WithRetainFlag()
-            .Build();
+        foreach (var (h3, chuvaMm) in chuvaPorCelula)
+        {
+            var mensagem = new MqttApplicationMessageBuilder()
+                .WithTopic(LeituraMqtt.TopicoDe(h3))
+                .WithPayload(LeituraMqtt.Serializar(new LeituraCelula(h3, ts, chuvaMm)))
+                .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
+                .WithRetainFlag()
+                .Build();
 
-        await mqtt.PublishAsync(mensagem, ct);
+            await mqtt.PublishAsync(mensagem, ct);
+        }
+
         await mqtt.DisconnectAsync(cancellationToken: ct);
     }
 }

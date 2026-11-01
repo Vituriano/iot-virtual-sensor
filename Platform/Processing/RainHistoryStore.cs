@@ -3,151 +3,136 @@ using VirtualSensor.Common;
 
 namespace VirtualSensor.Processing;
 
-public sealed record HistoricoRegistro(DateTimeOffset Ts, Dictionary<string, decimal> Chuva);
-
 /// <summary>
-/// UltimaLeituraTs é o timestamp do registro mais recente que contribuiu
-/// pra essa célula — usado como proxy de confiança (uma leitura fresca
-/// deste ciclo é mais confiável que uma só presente pela janela de 3h).
+/// UltimaLeituraTs é o timestamp da leitura mais recente dessa célula —
+/// usado como proxy de confiança (uma leitura fresca é mais confiável que
+/// uma só presente pela janela de 3h).
 /// </summary>
 public sealed record AcumuladoCelula(decimal Min15, decimal Hora1, decimal Hora3, DateTimeOffset UltimaLeituraTs);
 
 /// <summary>
-/// Camada de suporte: histórico local de leituras de chuva por célula.
+/// Camada de suporte: histórico local de leituras de chuva, por célula.
 ///
-/// Guarda um registro por ciclo (timestamp + chuva por célula) em
-/// estado/chuva_historico.jsonl pra poder calcular acumulados de
-/// 15min/1h/3h, como pede a fórmula do documento original (P = maior
-/// entre os acumulados de cada janela, cada um dividido pelo seu limiar).
+/// Cada sensor publica de forma independente, então o histórico também é
+/// por célula: uma lista de (timestamp, mm) em memória, persistida em
+/// estado/chuva_historico.jsonl (uma linha por leitura, só acréscimo) pra
+/// sobreviver a reinício. Serve pra calcular acumulados de 15min/1h/3h,
+/// como pede a fórmula do documento original (P = maior entre os
+/// acumulados de cada janela, cada um dividido pelo seu limiar).
 ///
-/// Suposição importante: cada leitura do feed representa a chuva "deste
-/// ciclo" (delta desde a leitura anterior da estação), não um total
-/// acumulado absoluto — é assim que o exemplo do professor trata o campo
-/// "chuva" (soma direto, sem subtrair nada). Se a semântica real do
-/// campo for outra, os acumulados aqui vão superestimar; precisa validar
-/// contra um evento de chuva real antes de confiar nos limiares.
+/// Suposição importante: cada leitura do feed representa a chuva "desta
+/// leitura" (delta desde a anterior da estação), não um total acumulado
+/// absoluto — é assim que o exemplo do professor trata o campo "chuva"
+/// (soma direto, sem subtrair nada). Se a semântica real do campo for
+/// outra, os acumulados aqui vão superestimar; precisa validar contra um
+/// evento de chuva real antes de confiar nos limiares.
 ///
-/// Rodar o sensor com --once várias vezes seguidas em poucos minutos
-/// conta a mesma leitura repetidas vezes nos acumulados — isso é
-/// esperado só em teste manual, não no loop de produção (1 ciclo real a
-/// cada 15 min).
+/// Uma leitura (célula, timestamp) já registrada é ignorada: o broker
+/// reentrega a última leitura de cada sensor (retain) quando a Platform
+/// reinicia, e sem isso a mesma chuva seria somada duas vezes.
 /// </summary>
-public static class RainHistoryStore
+public sealed class RainHistoryStore
 {
     private static readonly TimeSpan JanelaMaxima = TimeSpan.FromMinutes(3 * 60 + 15);
 
-    private static readonly (string Nome, int Minutos)[] Janelas =
-    {
-        ("15min", 15), ("1h", 60), ("3h", 180),
-    };
+    private static readonly int[] JanelasMin = { 15, 60, 180 };
 
-    private static string HistoricoPath() =>
-        Path.Combine(PathHelpers.SiblingDir("estado"), "chuva_historico.jsonl");
+    private readonly Lock _lock = new();
+    private readonly Dictionary<string, List<(DateTimeOffset Ts, decimal Mm)>> _porCelula = new();
+    private readonly string _path = Path.Combine(PathHelpers.SiblingDir("estado"), "chuva_historico.jsonl");
 
-    private static List<HistoricoRegistro> Ler()
+    public RainHistoryStore()
     {
-        var path = HistoricoPath();
-        if (!File.Exists(path))
+        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
+        Carregar();
+    }
+
+    /// <summary>
+    /// Registra a leitura e devolve o acumulado da célula no instante dela.
+    /// Idempotente: uma leitura já registrada não é somada de novo, mas o
+    /// acumulado é devolvido igual (a Platform precisa dele pra repopular o
+    /// cache depois de reiniciar).
+    /// </summary>
+    public AcumuladoCelula Registrar(string celula, DateTimeOffset ts, decimal mm)
+    {
+        lock (_lock)
         {
-            return new List<HistoricoRegistro>();
+            if (!_porCelula.TryGetValue(celula, out var leituras))
+            {
+                leituras = new List<(DateTimeOffset, decimal)>();
+                _porCelula[celula] = leituras;
+            }
+
+            if (leituras.Any(l => l.Ts == ts))
+            {
+                return Acumular(leituras, ts);
+            }
+
+            leituras.RemoveAll(l => ts - l.Ts > JanelaMaxima);
+            leituras.Add((ts, mm));
+
+            File.AppendAllText(_path,
+                JsonSerializer.Serialize(new { celula, ts = ts.ToString("o"), mm }) + "\n");
+
+            return Acumular(leituras, ts);
+        }
+    }
+
+    private static AcumuladoCelula Acumular(List<(DateTimeOffset Ts, decimal Mm)> leituras, DateTimeOffset tsAgora)
+    {
+        var somas = new decimal[JanelasMin.Length];
+        for (var i = 0; i < JanelasMin.Length; i++)
+        {
+            var limite = tsAgora - TimeSpan.FromMinutes(JanelasMin[i]);
+            somas[i] = leituras.Where(l => l.Ts >= limite && l.Ts <= tsAgora).Sum(l => l.Mm);
         }
 
-        var registros = new List<HistoricoRegistro>();
-        foreach (var linha in File.ReadLines(path))
+        return new AcumuladoCelula(somas[0], somas[1], somas[2], leituras.Max(l => l.Ts));
+    }
+
+    // Lê o arquivo, descarta o que já saiu da janela e reescreve só o que
+    // sobrou, pra ele não crescer pra sempre.
+    private void Carregar()
+    {
+        if (!File.Exists(_path))
+        {
+            return;
+        }
+
+        var agora = DateTimeOffset.UtcNow;
+        foreach (var linha in File.ReadLines(_path))
         {
             if (string.IsNullOrWhiteSpace(linha))
             {
                 continue;
             }
 
-            using var doc = JsonDocument.Parse(linha);
-            var root = doc.RootElement;
-            var ts = DateTimeOffset.Parse(root.GetProperty("ts").GetString()!);
-            var chuva = new Dictionary<string, decimal>();
-            foreach (var prop in root.GetProperty("chuva").EnumerateObject())
+            try
             {
-                chuva[prop.Name] = prop.Value.GetDecimal();
-            }
-            registros.Add(new HistoricoRegistro(ts, chuva));
-        }
-        return registros;
-    }
-
-    /// <summary>
-    /// Acrescenta a leitura deste ciclo ao histórico local e descarta
-    /// entradas mais velhas que a maior janela usada (3h + margem).
-    /// Retorna o histórico já atualizado.
-    /// </summary>
-    public static List<HistoricoRegistro> RegistrarCiclo(DateTimeOffset tsAgora, Dictionary<string, decimal> chuvaPorCelula)
-    {
-        Directory.CreateDirectory(PathHelpers.SiblingDir("estado"));
-
-        var registros = Ler().Where(r => tsAgora - r.Ts <= JanelaMaxima).ToList();
-
-        // O broker reentrega o último ciclo (retain) quando a Platform
-        // reinicia; sem esta checagem a mesma chuva seria somada duas vezes.
-        if (registros.Any(r => r.Ts == tsAgora))
-        {
-            return registros;
-        }
-
-        registros.Add(new HistoricoRegistro(tsAgora, new Dictionary<string, decimal>(chuvaPorCelula)));
-
-        using var writer = new StreamWriter(HistoricoPath(), append: false);
-        foreach (var r in registros)
-        {
-            var linha = JsonSerializer.Serialize(new { ts = r.Ts.ToString("o"), chuva = r.Chuva });
-            writer.WriteLine(linha);
-        }
-
-        return registros;
-    }
-
-    /// <summary>
-    /// Soma, para cada célula, as leituras registradas dentro de cada
-    /// janela (15min, 1h, 3h), e guarda o timestamp da leitura mais
-    /// recente de cada célula (usado como proxy de confiança).
-    /// </summary>
-    public static Dictionary<string, AcumuladoCelula> Acumulados(DateTimeOffset tsAgora, List<HistoricoRegistro> registros)
-    {
-        var somas = new Dictionary<string, decimal[]>(); // [15min, 1h, 3h]
-        var ultimaLeitura = new Dictionary<string, DateTimeOffset>();
-
-        for (var i = 0; i < Janelas.Length; i++)
-        {
-            var (_, minutos) = Janelas[i];
-            var limite = tsAgora - TimeSpan.FromMinutes(minutos);
-            foreach (var registro in registros)
-            {
-                if (registro.Ts < limite)
+                using var doc = JsonDocument.Parse(linha);
+                var root = doc.RootElement;
+                var ts = DateTimeOffset.Parse(root.GetProperty("ts").GetString()!);
+                if (agora - ts > JanelaMaxima)
                 {
                     continue;
                 }
-                foreach (var (cell, mm) in registro.Chuva)
-                {
-                    if (!somas.TryGetValue(cell, out var arr))
-                    {
-                        arr = new decimal[3];
-                        somas[cell] = arr;
-                    }
-                    arr[i] += mm;
-                }
-            }
-        }
 
-        foreach (var registro in registros)
-        {
-            foreach (var cell in registro.Chuva.Keys)
+                var celula = root.GetProperty("celula").GetString()!;
+                if (!_porCelula.TryGetValue(celula, out var leituras))
+                {
+                    leituras = new List<(DateTimeOffset, decimal)>();
+                    _porCelula[celula] = leituras;
+                }
+                leituras.Add((ts, root.GetProperty("mm").GetDecimal()));
+            }
+            catch (Exception ex) when (ex is JsonException or KeyNotFoundException or FormatException or InvalidOperationException)
             {
-                if (!ultimaLeitura.TryGetValue(cell, out var ts) || registro.Ts > ts)
-                {
-                    ultimaLeitura[cell] = registro.Ts;
-                }
+                // Linha em formato antigo ou truncada: ignora em vez de
+                // impedir a Platform de subir.
             }
         }
 
-        return somas.ToDictionary(
-            kv => kv.Key,
-            kv => new AcumuladoCelula(kv.Value[0], kv.Value[1], kv.Value[2], ultimaLeitura[kv.Key]));
+        File.WriteAllLines(_path, _porCelula.SelectMany(kv => kv.Value.Select(l =>
+            JsonSerializer.Serialize(new { celula = kv.Key, ts = l.Ts.ToString("o"), mm = l.Mm }))));
     }
 }
