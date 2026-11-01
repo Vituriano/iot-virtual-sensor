@@ -1,0 +1,6 @@
+@VirtualSensor.Platform_HostAddress = http://localhost:5128
+
+GET {{VirtualSensor.Platform_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

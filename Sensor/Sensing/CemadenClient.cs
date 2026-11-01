@@ -7,9 +7,10 @@ public sealed record Leitura(decimal Lat, decimal Lng, string Cidade, decimal Ch
 
 /// <summary>
 /// Parte da camada de sensoriamento: em vez de ler um pino físico, cada
-/// célula/sensor consome o feed público mantido pela APAC/Cemaden — este é
-/// o único dado que muda em tempo real, por isso é buscado por HTTP a cada
-/// ciclo (ao contrário da grade H3, que é referência estática em Data/).
+/// célula/sensor consome o feed público mantido pela APAC/Cemaden. É o
+/// único dado que muda em tempo real, por isso é buscado por HTTP a cada
+/// ciclo (ao contrário da grade H3, da maré e do terreno, que são
+/// referência estática em Data/).
 /// </summary>
 public sealed class CemadenClient
 {

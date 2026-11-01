@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/Platform/">
+    <Project Path="Platform/VirtualSensor.Platform.csproj" />
+  </Folder>
+  <Folder Name="/Sensor/">
+    <Project Path="Sensor/VirtualSensor.Sensor.csproj" />
+  </Folder>
+  <Folder Name="/Shared/">
+    <Project Path="Shared/VirtualSensor.Shared.csproj" />
+  </Folder>
+</Solution>

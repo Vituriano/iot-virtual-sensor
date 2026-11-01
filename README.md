@@ -1,50 +1,87 @@
 # Sensor virtual de alagamento: Região Metropolitana do Recife
 
-Sensor virtual de IoT que reporta a chuva em cada célula H3 (~0,74 km²)
-dos 14 municípios da RMR, usando dado real da APAC/Cemaden.
+Solução IoT que estima o risco de alagamento em cada célula H3
+(~0,74 km²) dos 14 municípios da RMR: um **Sensor** que lê chuva real e
+uma **Platform** que cruza essa leitura com maré, terreno e histórico pra
+calcular o risco, exposto por API.
 
-Cada célula é, na prática, um sensor independente: lê a chuva mais
-próxima da sua posição e reporta o valor bruto. São 3.210 células no
-total, cobrindo toda a RMR em resolução H3 8. Os municípios usados pra
-montar essa grade vêm de dado estático do IBGE.
-
-O dispositivo roda em duas camadas:
-
-1. Sensoriamento (`Sensing/CemadenClient.cs` + `Sensing/CellReadingAssigner.cs`).
-   Busca as leituras de chuva no feed público da APAC/Cemaden, filtra
-   pelas estações dentro dos 14 municípios e associa cada uma à célula
-   que a contém.
-2. Ciclo de vida (`Program.cs`). Repete sensoriamento e saída a cada 15
-   minutos, com `while(true)` / `Task.Delay`.
-
-O dashboard mostra a chuva máxima lida por município, agregando as
-células daquele município.
-
-## Escopo atual
-
-Essa versão só lê e reporta a chuva bruta (mm) de cada estação. Nenhuma
-classificação de risco é feita aqui: isso é regra de negócio, não
-sensoriamento, e fica pra uma camada de interpretação separada.
-
-## Como rodar
-
-```bash
-dotnet run --once   # um ciclo só
-dotnet run           # loop contínuo, a cada 15 min
-```
-
-Requer .NET 8+. O NuGet (`H3Lib`) é restaurado automaticamente no
-primeiro `dotnet run`/`dotnet build`.
-
-## Estrutura
+São 3 projetos, cada um com um papel:
 
 ```
 iot-virtual-sensor/
-├── Data/rmr_municipios.json         # polígonos dos 14 municípios (IBGE), estático
-├── Common/PathHelpers.cs            # acha Data/ a partir de quem chama
-├── Grid/H3GridBuilder.cs            # grade H3 a partir dos polígonos, nomes dos municípios
-├── Sensing/CemadenClient.cs         # feed APAC/Cemaden, dado ao vivo
-├── Sensing/CellReadingAssigner.cs   # associa cada leitura à célula que a contém
-├── Program.cs                       # ciclo de vida
-└── VirtualSensor.csproj
+├── VirtualSensor.slnx
+├── Shared/    # grade H3, código e dado comum aos outros dois
+├── Sensor/    # Worker Service: lê chuva, publica a leitura
+└── Platform/  # API: consome a leitura, calcula risco, expõe HTTP
 ```
+
+Sensor e Platform são processos independentes — não se chamam
+diretamente. O único ponto de contato é um arquivo compartilhado que o
+Sensor escreve e a Platform lê (`estado-sensor/leituras_atual.json`).
+
+## Shared
+
+Código e dado usados pelos dois outros projetos:
+
+- `Grid/H3GridBuilder.cs` — gera a grade de 3.210 células H3 a partir dos
+  polígonos dos 14 municípios (`Data/rmr_municipios.json`, IBGE, estático).
+- `Common/PathHelpers.cs` — resolve caminhos de arquivo de forma estável,
+  incluindo a pasta compartilhada entre Sensor e Platform.
+- `LeituraStore.cs` — contrato de troca de dado: o Sensor escreve a chuva
+  do ciclo, a Platform lê.
+
+## Sensor
+
+Dispositivo IoT virtual: na prática são vários sensores virtuais, um por
+célula H3, cada um lendo a chuva mais próxima da sua posição (feed
+público da APAC/Cemaden) e publicando o valor bruto. Nenhuma
+classificação de risco é feita aqui — isso é regra de negócio da
+Platform, não sensoriamento.
+
+Roda como Worker Service (`BackgroundService`), um ciclo a cada 15
+minutos:
+
+```bash
+dotnet run --project Sensor            # loop contínuo
+dotnet run --project Sensor -- --once  # um ciclo só, pra testar
+```
+
+## Platform
+
+Cruza a chuva publicada pelo Sensor com dado estático e calcula o risco:
+
+- `Processing/RainHistoryStore.cs` mantém um histórico local e calcula
+  acumulados de chuva por janela (15min/1h/3h).
+- `Processing/TideCalculator.cs` calcula a maré prevista a partir da
+  tábua oficial da DHN para 2026 (`Data/mare_recife_2026.json`),
+  interpolando por cosseno entre os extremos publicados.
+- `Processing/TerrainCalculator.cs` calcula a suscetibilidade do terreno
+  por célula: elevação (`Data/elevacao_rmr.json`, proxy de HAND),
+  declividade e distância a curso d'água (`Data/hidrografia_rmr.json`).
+- `Processing/RiskCalculator.cs` combina os três fatores na fórmula
+  `R = P · M · S` (chuva × maré × terreno), classifica em 4 níveis (0 a
+  3) e calcula probabilidade estimada e grau de confiança por célula.
+- `RiscoIngestorService.cs` fica de olho no arquivo do Sensor; a cada
+  ciclo novo, recalcula o risco e atualiza o cache em memória
+  (`RiscoCache.cs`) que a API lê.
+
+Roda como Web API (ASP.NET Core, endpoints mínimos):
+
+```bash
+dotnet run --project Platform
+curl http://localhost:5128/risco/atual
+```
+
+`GET /risco/atual` retorna o ciclo mais recente processado e, por célula:
+município, nível (0-3), probabilidade, confiança e os fatores (P, M, S).
+
+## Como rodar tudo
+
+Em dois terminais:
+
+```bash
+dotnet run --project Sensor      # publica leitura a cada 15 min
+dotnet run --project Platform    # consome, calcula risco, expõe API
+```
+
+Ou builda a solução inteira de uma vez com `dotnet build`.
