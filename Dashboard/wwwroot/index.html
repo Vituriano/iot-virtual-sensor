@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Risco de alagamento — RMR</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { --bg:#fff; --fg:#1b1f24; --muted:#5b6672; --panel:#f4f6f8; --line:#d8dee4;
+          --n0:#2e9e5b; --n1:#e0b400; --n2:#e8761a; --n3:#c4232b; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14181d; --fg:#e8ecf0; --muted:#98a3ae; --panel:#1d232a; --line:#2f3841; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.4 system-ui, sans-serif;
+         display:grid; grid-template-rows:auto 1fr; height:100vh; }
+  header { padding:12px 16px; background:var(--panel); border-bottom:1px solid var(--line);
+           display:flex; flex-wrap:wrap; gap:8px 24px; align-items:center; }
+  h1 { font-size:17px; margin:0; margin-right:auto; }
+  .stat { color:var(--muted); font-size:13px; }
+  .stat b { color:var(--fg); }
+  .chip { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:4px; }
+  #map { width:100%; height:100%; }
+  #erro { display:none; color:var(--n3); font-size:13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Risco de alagamento — Região Metropolitana do Recife</h1>
+  <span class="stat">Atualizado em: <b id="ciclo">—</b></span>
+  <span class="stat">Sensores com leitura: <b id="total">—</b></span>
+  <span class="stat" id="legenda"></span>
+  <span class="stat"><span class="chip" style="background:var(--muted);opacity:.3"></span>sem dado recente</span>
+  <span id="erro">Platform indisponível ou sem ciclo recebido.</span>
+</header>
+<div id="map"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const NIVEIS = [
+  { nome: "Baixo",    cor: "#2e9e5b" },
+  { nome: "Moderado", cor: "#e0b400" },
+  { nome: "Alto",     cor: "#e8761a" },
+  { nome: "Crítico",  cor: "#c4232b" },
+];
+const INTERVALO_MS = 30000;
+
+document.getElementById("legenda").innerHTML = NIVEIS
+  .map(n => `<span class="chip" style="background:${n.cor}"></span>${n.nome}`).join(" &nbsp; ");
+
+const map = L.map("map").setView([-8.05, -34.95], 10);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 18, attribution: "© OpenStreetMap",
+}).addTo(map);
+const camada = L.layerGroup().addTo(map);
+
+const SEM_DADO = "sem dado recente";
+
+function popup(c) {
+  const n = NIVEIS[c.nivel];
+  return `<b>${c.municipio}</b><br>Nível: ${n.nome} (${c.nivel})<br>` +
+    `Probabilidade: ${(c.probabilidade * 100).toFixed(0)}%<br>Confiança: ${c.confianca}<br>` +
+    `Última leitura: ${new Date(c.ultima_leitura).toLocaleString("pt-BR")}<br>` +
+    `Chuva 1h: ${c.chuva_1h_mm} mm<br>` +
+    `P=${c.fatores.p.toFixed(2)} · M=${c.fatores.m.toFixed(2)} · S=${c.fatores.s.toFixed(2)}`;
+}
+
+let platformUrl;
+
+async function atualizar() {
+  const erro = document.getElementById("erro");
+  try {
+    platformUrl ??= (await (await fetch("/config.json")).json()).platformUrl;
+    const r = await fetch(`${platformUrl}/risco/atual`);
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    erro.style.display = "none";
+
+    camada.clearLayers();
+    L.geoJSON(d, {
+      style: f => {
+        const cor = NIVEIS[f.properties.nivel].cor;
+        const velho = f.properties.confianca === SEM_DADO;
+        return {
+          color: cor, weight: 1, fillColor: cor,
+          fillOpacity: velho ? 0.12 : 0.55, dashArray: velho ? "4" : null,
+        };
+      },
+      onEachFeature: (f, layer) => layer.bindPopup(popup(f.properties)),
+    }).addTo(camada);
+    document.getElementById("ciclo").textContent = new Date(d.atualizado_em).toLocaleString("pt-BR");
+    document.getElementById("total").textContent = d.total_celulas;
+  } catch {
+    erro.style.display = "inline";
+  }
+}
+
+atualizar();
+setInterval(atualizar, INTERVALO_MS);
+</script>
+</body>
+</html>

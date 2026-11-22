@@ -4,9 +4,10 @@ namespace VirtualSensor.Common;
 
 /// <summary>
 /// Resolve uma pasta irmã do diretório de quem chama. Usado por
-/// H3GridBuilder pra achar Data/. [CallerFilePath] captura o arquivo de
-/// quem chamou (não deste arquivo), então funciona igual não importa de
-/// qual pasta venha a chamada.
+/// H3GridBuilder pra achar Data/, e por RainHistoryStore pra achar seu
+/// estado/ interno. [CallerFilePath] captura o arquivo de quem chamou
+/// (não deste arquivo), então funciona igual não importa de qual pasta
+/// venha a chamada.
 /// </summary>
 public static class PathHelpers
 {
