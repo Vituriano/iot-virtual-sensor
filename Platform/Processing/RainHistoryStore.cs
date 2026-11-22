@@ -39,17 +39,21 @@ public sealed class RainHistoryStore
 
     private readonly Lock _lock = new();
     private readonly Dictionary<string, List<(DateTimeOffset Ts, decimal Mm)>> _porCelula = new();
-    private readonly string _path = Path.Combine(PathHelpers.SiblingDir("estado"), "chuva_historico.jsonl");
+    private readonly string _path;
 
-    public RainHistoryStore()
+    /// <param name="path">Arquivo do histórico. Padrão:
+    /// Platform/estado/chuva_historico.jsonl. Os testes passam um arquivo
+    /// temporário pra não misturar com o estado real.</param>
+    public RainHistoryStore(string? path = null)
     {
+        _path = path ?? Path.Combine(PathHelpers.SiblingDir("estado"), "chuva_historico.jsonl");
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
         Carregar();
     }
 
     /// <summary>
-    /// Registra a leitura e devolve o acumulado da célula no instante dela.
-    /// Idempotente: uma leitura já registrada não é somada de novo, mas o
+    /// Registra a leitura e devolve o acumulado da célula no instante da
+    /// leitura mais recente que ela já recebeu. Idempotente: uma leitura já registrada não é somada de novo, mas o
     /// acumulado é devolvido igual (a Platform precisa dele pra repopular o
     /// cache depois de reiniciar).
     /// </summary>
@@ -63,18 +67,20 @@ public sealed class RainHistoryStore
                 _porCelula[celula] = leituras;
             }
 
-            if (leituras.Any(l => l.Ts == ts))
+            if (leituras.All(l => l.Ts != ts))
             {
-                return Acumular(leituras, ts);
+                leituras.Add((ts, mm));
+                File.AppendAllText(_path,
+                    JsonSerializer.Serialize(new { celula, ts = ts.ToString("o"), mm }) + "\n");
             }
 
-            leituras.RemoveAll(l => ts - l.Ts > JanelaMaxima);
-            leituras.Add((ts, mm));
-
-            File.AppendAllText(_path,
-                JsonSerializer.Serialize(new { celula, ts = ts.ToString("o"), mm }) + "\n");
-
-            return Acumular(leituras, ts);
+            // O estado da célula é sempre o do instante da leitura MAIS
+            // RECENTE dela, não o da que acabou de chegar: com QoS 1 e
+            // reconexões, uma leitura antiga pode chegar depois de uma nova,
+            // e não pode "voltar no tempo" o risco da célula.
+            var maisRecente = leituras.Max(l => l.Ts);
+            leituras.RemoveAll(l => maisRecente - l.Ts > JanelaMaxima);
+            return Acumular(leituras, maisRecente);
         }
     }
 
@@ -87,7 +93,7 @@ public sealed class RainHistoryStore
             somas[i] = leituras.Where(l => l.Ts >= limite && l.Ts <= tsAgora).Sum(l => l.Mm);
         }
 
-        return new AcumuladoCelula(somas[0], somas[1], somas[2], leituras.Max(l => l.Ts));
+        return new AcumuladoCelula(somas[0], somas[1], somas[2], tsAgora);
     }
 
     // Lê o arquivo, descarta o que já saiu da janela e reescreve só o que

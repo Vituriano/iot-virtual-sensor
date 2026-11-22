@@ -67,8 +67,26 @@ public static class TideCalculator
         return h0 + (h1 - h0) * cosseno;
     }
 
+    /// <summary>A tábua carregada tem extremos antes e depois do instante?</summary>
+    public static bool Cobre(DateTimeOffset instante)
+    {
+        var extremos = _tabua.Value.Extremos;
+        return extremos[0].Ts <= instante && instante < extremos[^1].Ts;
+    }
+
+    /// <summary>
+    /// Fator M. Fora do período da tábua (hoje só 2026) devolve 1, o valor
+    /// neutro: o risco passa a depender só de chuva e terreno, em vez de a
+    /// Platform parar de calcular quando o ano vira. Quem chama decide se
+    /// avisa (ver RiscoIngestorService).
+    /// </summary>
     public static decimal FatorMare(DateTimeOffset instante)
     {
+        if (!Cobre(instante))
+        {
+            return 1.0m;
+        }
+
         var altura = AlturaPrevistaM(instante);
         var nivelMedioM = _tabua.Value.NivelMedioM;
         // Nível médio como referência E escala: M=1 pra toda a metade

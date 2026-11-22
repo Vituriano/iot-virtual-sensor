@@ -2,6 +2,9 @@
   <Folder Name="/Dashboard/">
     <Project Path="Dashboard/VirtualSensor.Dashboard.csproj" />
   </Folder>
+  <Folder Name="/Experimentos/">
+    <Project Path="Experimentos/VirtualSensor.Experimentos.csproj" />
+  </Folder>
   <Folder Name="/Platform/">
     <Project Path="Platform/VirtualSensor.Platform.csproj" />
   </Folder>
@@ -10,5 +13,8 @@
   </Folder>
   <Folder Name="/Shared/">
     <Project Path="Shared/VirtualSensor.Shared.csproj" />
+  </Folder>
+  <Folder Name="/Tests/">
+    <Project Path="Tests/VirtualSensor.Tests.csproj" />
   </Folder>
 </Solution>

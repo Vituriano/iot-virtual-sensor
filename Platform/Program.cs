@@ -17,7 +17,7 @@ builder.Services.AddOpenApi();
 var origensPermitidas = builder.Configuration.GetSection("Cors:Origins").Get<string[]>() ?? [];
 builder.Services.AddCors(o => o.AddDefaultPolicy(p => p.WithOrigins(origensPermitidas).AllowAnyMethod()));
 builder.Services.AddSingleton<RiscoCache>();
-builder.Services.AddSingleton<RainHistoryStore>();
+builder.Services.AddSingleton(_ => new RainHistoryStore(builder.Configuration["Estado:HistoricoPath"]));
 builder.Services.AddHostedService<RiscoIngestorService>();
 
 var app = builder.Build();
@@ -65,6 +65,7 @@ app.MapGet("/risco/atual", (RiscoCache cache) =>
                 probabilidade = kv.Value.Probabilidade,
                 confianca = RiskCalculator.CalcularConfianca(agora, kv.Value.UltimaLeitura),
                 ultima_leitura = kv.Value.UltimaLeitura,
+                processado_em = kv.Value.ProcessadoEm,
                 fatores = new { p = kv.Value.P, m = kv.Value.M, s = kv.Value.S },
                 chuva_1h_mm = kv.Value.Chuva1HMm,
             },
@@ -74,3 +75,6 @@ app.MapGet("/risco/atual", (RiscoCache cache) =>
 .WithName("GetRiscoAtual");
 
 app.Run();
+
+// Exposto pros testes de integração (WebApplicationFactory<Program>).
+public partial class Program;
