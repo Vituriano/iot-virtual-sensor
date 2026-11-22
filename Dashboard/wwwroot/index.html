@@ -61,7 +61,7 @@ function popup(c) {
   return `<b>${c.municipio}</b><br>Nível: ${n.nome} (${c.nivel})<br>` +
     `Probabilidade: ${(c.probabilidade * 100).toFixed(0)}%<br>Confiança: ${c.confianca}<br>` +
     `Última leitura: ${new Date(c.ultima_leitura).toLocaleString("pt-BR")}<br>` +
-    `Chuva 1h: ${c.chuva_1h_mm} mm<br>` +
+    `Chuva 1h: ${Number(c.chuva_1h_mm).toFixed(1)} mm<br>` +
     `P=${c.fatores.p.toFixed(2)} · M=${c.fatores.m.toFixed(2)} · S=${c.fatores.s.toFixed(2)}`;
 }
 

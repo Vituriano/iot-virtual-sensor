@@ -55,7 +55,7 @@ public sealed class RiscoIngestorService(
 
                     var leitura = LeituraMqtt.Desserializar(h3, e.ApplicationMessage.Payload.ToArray());
                     var acumulado = historico.Registrar(h3, leitura.Ts, leitura.ChuvaMm);
-                    var fatorM = TideCalculator.FatorMare(leitura.Ts);
+                    var fatorM = TideCalculator.FatorMare(acumulado.UltimaLeituraTs);
                     var risco = RiskCalculator.CalcularRisco(
                         info, acumulado, fatorM, suscetibilidadePorCelula.GetValueOrDefault(h3));
 

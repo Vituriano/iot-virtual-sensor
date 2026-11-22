@@ -1,6 +1,6 @@
 # Arquitetura — Sensor virtual de alagamento (RMR)
 
-IN1061 · Entrega 2 · Equipe: _(preencher)_
+IN1061 · Entrega 2
 
 **Visão geral.** Cada célula H3 (~0,74 km², 3.210 na RMR) é um sensor virtual de chuva. Uma plataforma IoT cruza a leitura com maré, terreno e histórico e estima o risco de alagamento (nível 0–3, probabilidade, confiança). Um dashboard mostra o resultado em mapa.
 
@@ -19,7 +19,7 @@ flowchart LR
 |---|---|
 | Conectividade | **Wi-Fi** (IEEE 802.11), TCP/IP: dispositivo → broker → servidor |
 | Paradigma | **Publish/Subscribe**, orientado a eventos (Sensor → Platform); Request/Response (Platform → Dashboard) |
-| Protocolo | **MQTT 3.1.1** (TCP 1883, Mosquitto) entre Sensor e Platform; **HTTP + GeoJSON** (RFC 7946) para a tela |
+| Protocolo | **MQTT 5** (TCP 1883, Mosquitto) entre Sensor e Platform; **HTTP + GeoJSON** (RFC 7946) para a tela |
 | Componentes | 3 projetos .NET 10 independentes: `Sensor`, `Platform`, `Dashboard` |
 
 **Por que MQTT.** Cada sensor é um produtor de eventos: pub/sub desacopla produtor e consumidor, o *retain* repovoa a Platform ao reiniciar e o cabeçalho é mínimo. CoAP tem pouco suporte em .NET; HTTP faria o Sensor depender do endereço da Platform. **Limites assumidos:** broker é ponto único de falha e roda sem autenticação/TLS (apenas desenvolvimento); tela usa polling, e push (SSE/WebSocket) fica como evolução. **Próxima etapa:** histórico de risco com controle de tempo no mapa (hoje só o último valor é guardado), calibração contra ocorrências reais e Eclipse Ditto (uma *Thing* por célula) no lugar do cache em memória.

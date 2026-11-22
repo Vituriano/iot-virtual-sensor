@@ -22,11 +22,14 @@ namespace VirtualSensor.Sensor;
 /// </summary>
 public class Worker(ILogger<Worker> logger, IHostApplicationLifetime lifetime, IConfiguration config) : BackgroundService
 {
-    private static readonly TimeSpan CicloIntervalo = TimeSpan.FromMinutes(15);
-
     // --once roda um ciclo só e encerra — útil pra testar localmente sem
     // esperar 15 minutos. Não afeta o comportamento normal do serviço.
     private static readonly bool Once = Environment.GetCommandLineArgs().Contains("--once");
+
+    // --simular troca o feed APAC/Cemaden por uma tempestade sintética
+    // (RainSimulator) pra testar o fluxo inteiro sem depender de chover.
+    // O resto (grade, MQTT, tópico, payload) é idêntico ao modo real.
+    private static readonly bool Simular = Environment.GetCommandLineArgs().Contains("--simular");
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -35,7 +38,14 @@ public class Worker(ILogger<Worker> logger, IHostApplicationLifetime lifetime, I
             "Grade H3 carregada: {Count} células (res {Res}) cobrindo os 14 municípios da RMR.",
             grid.Count, H3GridBuilder.H3Resolution);
 
+        // 15 min por padrão (cadência do feed); configurável pra testes
+        // (ex.: --Sensor:IntervaloSegundos=60 junto com --simular).
+        var cicloIntervalo = TimeSpan.FromSeconds(int.Parse(config["Sensor:IntervaloSegundos"] ?? "900"));
+        logger.LogInformation("Fonte: {Fonte}; ciclo a cada {Seg}s.",
+            Simular ? "tempestade simulada" : "feed APAC/Cemaden", cicloIntervalo.TotalSeconds);
+
         var cliente = new CemadenClient();
+        var ciclo = 0;
         var brokerHost = config["Mqtt:Host"] ?? "localhost";
         var brokerPort = int.Parse(config["Mqtt:Port"] ?? "1883");
 
@@ -43,8 +53,10 @@ public class Worker(ILogger<Worker> logger, IHostApplicationLifetime lifetime, I
         {
             try
             {
-                var leituras = await cliente.LeiturasRmrAsync(stoppingToken);
-                var chuvaPorCelula = CellReadingAssigner.AtribuirLeiturasACelulas(leituras, grid);
+                List<Leitura> leituras = Simular ? [] : await cliente.LeiturasRmrAsync(stoppingToken);
+                var chuvaPorCelula = Simular
+                    ? RainSimulator.Gerar(grid, ciclo++)
+                    : CellReadingAssigner.AtribuirLeiturasACelulas(leituras, grid);
 
                 var agora = DateTimeOffset.UtcNow;
                 await PublicarAsync(agora, chuvaPorCelula, brokerHost, brokerPort, stoppingToken);
@@ -67,7 +79,7 @@ public class Worker(ILogger<Worker> logger, IHostApplicationLifetime lifetime, I
                 return;
             }
 
-            await Task.Delay(CicloIntervalo, stoppingToken);
+            await Task.Delay(cicloIntervalo, stoppingToken);
         }
     }
 
