@@ -65,6 +65,7 @@ app.MapGet("/risco/atual", (RiscoCache cache) =>
                 probabilidade = kv.Value.Probabilidade,
                 confianca = RiskCalculator.CalcularConfianca(agora, kv.Value.UltimaLeitura),
                 ultima_leitura = kv.Value.UltimaLeitura,
+                processado_em = kv.Value.ProcessadoEm,
                 fatores = new { p = kv.Value.P, m = kv.Value.M, s = kv.Value.S },
                 chuva_1h_mm = kv.Value.Chuva1HMm,
             },

@@ -68,6 +68,7 @@ public sealed class FluxoPontaAPontaTests : IAsyncLifetime
         Assert.Equal("Recife", celula.GetProperty("municipio").GetString());
         Assert.Equal("alta", celula.GetProperty("confianca").GetString());
         Assert.Equal(25m, celula.GetProperty("chuva_1h_mm").GetDecimal());
+        Assert.InRange(celula.GetProperty("processado_em").GetDateTimeOffset(), ts, DateTimeOffset.UtcNow);
         Assert.True(celula.GetProperty("nivel").GetInt32() >= 1, "25 mm em 15 min deveria gerar algum risco");
     }
 

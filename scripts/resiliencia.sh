@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # E5 · Resiliência: o que acontece quando a Platform ou o broker reiniciam.
 #
-#   dotnet build && ./scripts/resiliencia.sh
+#   ./scripts/resiliencia.sh
 #
 # Sobe o broker limpo e uma Platform com histórico temporário, publica um
 # ciclo simulado (3.210 sensores, com retain) e mede:
@@ -29,7 +29,13 @@ esperar_total() { # $1 = alvo
   for _ in $(seq 1 600); do [ "$(total)" -ge "$1" ] && return 0; sleep 0.1; done
   echo "timeout esperando $1 células" >&2; return 1
 }
+if (echo > /dev/tcp/127.0.0.1/5128) 2>/dev/null; then
+  echo "A porta 5128 está em uso: pare a Platform que estiver rodando e tente de novo." >&2
+  exit 1
+fi
 trap '[ -n "$PLATFORM_PID" ] && kill $PLATFORM_PID 2>/dev/null || true' EXIT
+
+dotnet build --nologo -v q >/dev/null
 
 echo "# E5 · Resiliência — $(date '+%Y-%m-%d %H:%M')"
 docker compose down -v >/dev/null 2>&1 || true   # broker sem nenhuma mensagem retida

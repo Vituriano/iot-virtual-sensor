@@ -62,17 +62,25 @@ iot-virtual-sensor/
 │   ├── Processing/             #   chuva acumulada, maré, terreno, risco
 │   └── Data/                   #   maré DHN 2026, elevação, hidrografia
 ├── Dashboard/                  # servidor estático + mapa (wwwroot/index.html)
-├── Tests/                      # 38 testes xUnit (unidade + integração ponta a ponta)
-├── Experimentos/               # testes experimentais: latência, carga, modelo, confiança
-├── scripts/resiliencia.sh      # teste experimental: queda da Platform e do broker
-└── docs/                       # arquitetura, testes, resultados e imagens
+├── Tests/                      # testes xUnit (unidade + integração ponta a ponta)
+├── Experimentos/               # testes experimentais contra o sistema rodando
+├── scripts/                    # experimentos.sh, resiliencia.sh, graficos.py
+└── docs/                       # arquitetura, testes, imagens
+    └── resultados/             #   CSVs brutos, resumos e gráficos dos experimentos
 ```
 
 ## Como rodar
 
 Pré-requisitos: [.NET 10 SDK](https://dotnet.microsoft.com/download) e
-Docker. Cada comando abaixo num terminal próprio, a partir da raiz do
-repositório.
+Docker (com Docker Compose). Testado em Linux.
+
+```bash
+git clone https://github.com/Vituriano/iot-virtual-sensor.git
+cd iot-virtual-sensor
+dotnet build
+```
+
+Cada comando abaixo num terminal próprio, a partir da raiz do repositório.
 
 1. Subir o broker MQTT:
 
@@ -114,8 +122,11 @@ curl http://localhost:5128/risco/atual
 ```
 
 Resposta: um GeoJSON `FeatureCollection` (com `atualizado_em` e
-`total_celulas`), uma `Feature` Polygon por célula com leitura. Antes da
-primeira leitura, responde `503`.
+`total_celulas`), uma `Feature` Polygon por célula com leitura. Nas
+`properties`: município, nível (0–3), probabilidade, confiança, fatores
+P/M/S, chuva da última hora, `ultima_leitura` (instante da leitura no
+sensor) e `processado_em` (instante em que a Platform calculou o risco).
+Antes da primeira leitura, responde `503`.
 
 ### Testes
 
@@ -123,17 +134,30 @@ primeira leitura, responde `503`.
 dotnet test
 ```
 
-Roda os 38 testes, incluindo o fluxo ponta a ponta (broker MQTT em
-memória + Platform completa). Não precisa de Docker. Os testes
-experimentais e seus resultados estão em
+Roda os testes automatizados, incluindo o fluxo ponta a ponta (broker
+MQTT em memória + Platform completa). Não precisa de Docker.
+
+Testes experimentais, cada um com um comando (pare a Platform antes; eles
+sobem um ambiente limpo):
+
+```bash
+./scripts/experimentos.sh   # latência, escalabilidade, modelo, confiança, estabilidade (~4 min)
+./scripts/resiliencia.sh    # queda e volta da Platform e do broker (~1 min)
+```
+
+Dados brutos (CSV), resumo e gráficos ficam em
+[`docs/resultados/`](docs/resultados/); a análise está em
 [`docs/testes.md`](docs/testes.md).
 
 ## Resultados em uma linha
 
-Uma leitura leva **7 ms** (mediana) do publish MQTT até a API; um ciclo
-com as **3.210 células** fica visível em **~1 s**; Platform e broker se
-recuperam de reinício em **~5 s** sem perder leituras. Detalhes em
+Cada leitura passa pelo pipeline MQTT em **~1 ms**. Um ciclo com as
+**3.210 células** é processado em **< 1 s**, com latência estável de 1 a
+3.210 sensores e ao longo de 20 ciclos seguidos. Platform e broker voltam
+de um reinício em **~5 s** sem perder leituras. Gráficos e análise em
 [`docs/testes.md`](docs/testes.md).
+
+![Escalabilidade](docs/resultados/graficos/escalabilidade.png)
 
 ## Configuração
 

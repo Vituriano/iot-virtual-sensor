@@ -58,9 +58,13 @@ public class SensorTests
     }
 
     [Fact]
-    public void Mare_fora_de_2026_falha_explicitamente()
+    public void Mare_fora_de_2026_vira_fator_neutro_em_vez_de_derrubar_o_calculo()
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => TideCalculator.AlturaPrevistaM(new DateTimeOffset(2027, 6, 1, 0, 0, 0, TimeSpan.Zero)));
+        var em2027 = new DateTimeOffset(2027, 6, 1, 0, 0, 0, TimeSpan.Zero);
+
+        Assert.False(TideCalculator.Cobre(em2027));
+        Assert.Equal(1m, TideCalculator.FatorMare(em2027));
+        Assert.Throws<ArgumentOutOfRangeException>(() => TideCalculator.AlturaPrevistaM(em2027));
     }
 
     [Fact]

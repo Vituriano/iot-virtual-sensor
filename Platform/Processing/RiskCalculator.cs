@@ -13,7 +13,16 @@ public sealed record RiscoCelula(
     decimal R,
     int Nivel,
     decimal Probabilidade,
-    DateTimeOffset UltimaLeitura);
+    DateTimeOffset UltimaLeitura)
+{
+    /// <summary>
+    /// Instante (relógio da Platform) em que este risco foi calculado.
+    /// Junto com o <c>ts</c> da leitura, dá a latência de cada mensagem
+    /// dentro do pipeline (publish → broker → ingestão → cache), sem o
+    /// custo de consultar a API entrar na conta.
+    /// </summary>
+    public DateTimeOffset ProcessadoEm { get; init; }
+}
 
 /// <summary>
 /// Combina chuva, maré e terreno num nível de risco por célula.

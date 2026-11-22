@@ -20,6 +20,9 @@ public sealed class RiscoIngestorService(
 {
     private static readonly TimeSpan IntervaloReconexao = TimeSpan.FromSeconds(5);
 
+    // 1 depois do primeiro aviso de "maré fora da tábua", pra não repetir o
+    // mesmo warning a cada uma das 3.210 leituras.
+    private int _avisouMareForaDaTabua;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -55,19 +58,26 @@ public sealed class RiscoIngestorService(
 
                     var leitura = LeituraMqtt.Desserializar(h3, e.ApplicationMessage.Payload.ToArray());
                     var acumulado = historico.Registrar(h3, leitura.Ts, leitura.ChuvaMm);
+                    if (!TideCalculator.Cobre(acumulado.UltimaLeituraTs) &&
+                        Interlocked.Exchange(ref _avisouMareForaDaTabua, 1) == 0)
+                    {
+                        logger.LogWarning(
+                            "Leitura de {Ts} fora da tábua de marés (só 2026): usando M = 1 (neutro) até a tábua ser atualizada.",
+                            acumulado.UltimaLeituraTs);
+                    }
+
                     var fatorM = TideCalculator.FatorMare(acumulado.UltimaLeituraTs);
                     var risco = RiskCalculator.CalcularRisco(
                         info, acumulado, fatorM, suscetibilidadePorCelula.GetValueOrDefault(h3));
 
-                    cache.Atualizar(h3, risco);
+                    cache.Atualizar(h3, risco with { ProcessadoEm = DateTimeOffset.UtcNow });
                     logger.LogDebug("Risco de {H3} atualizado: nível {Nivel}.", h3, risco.Nivel);
                 }
                 catch (Exception ex)
                 {
                     // Diferente do Sensor (que derruba o processo num erro
                     // inesperado): aqui tem gente consumindo a API ao vivo, então
-                    // uma leitura com erro (ex.: tábua de maré esgotada no fim do
-                    // ano) fica logado como erro alto, mas a API continua no ar
+                    // uma leitura com erro (ex.: payload inválido) fica logado como erro alto, mas a API continua no ar
                     // servindo o último risco válido em vez de cair inteira.
                     logger.LogError(ex, "Falha ao processar uma leitura do sensor.");
                 }
